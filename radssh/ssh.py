@@ -58,6 +58,42 @@ sshconfig_loglevels = {
     'DEBUG3': logging.DEBUG
 }
 
+sem = threading.Semaphore(10)
+
+DEFAULT_SESSION_WINDOW_SIZE = paramiko.common.MAX_WINDOW_SIZE
+DEFAULT_SESSION_MAX_PACKET_SIZE = 2097152
+DEFAULT_REKEY_LIMIT = pow(2, 40)
+
+
+def _int_setting(defaults, setting, default):
+    if defaults is None:
+        return default
+    try:
+        return int(defaults.get(setting, default))
+    except (TypeError, ValueError):
+        logging.getLogger('radssh').warning('Invalid %s value %r; using %r', setting, defaults.get(setting), default)
+        return default
+
+
+def _configure_rekey(transport, defaults=None):
+    rekey_bytes = _int_setting(defaults, 'ssh.rekey_bytes', DEFAULT_REKEY_LIMIT)
+    rekey_packets = _int_setting(defaults, 'ssh.rekey_packets', DEFAULT_REKEY_LIMIT)
+    if rekey_bytes > 0:
+        transport.packetizer.REKEY_BYTES = rekey_bytes
+    if rekey_packets > 0:
+        transport.packetizer.REKEY_PACKETS = rekey_packets
+
+
+def open_tuned_session(transport, defaults=None):
+    _configure_rekey(transport, defaults)
+    session_options = {}
+    window_size = _int_setting(defaults, 'ssh.channel.window_size', DEFAULT_SESSION_WINDOW_SIZE)
+    max_packet_size = _int_setting(defaults, 'ssh.channel.max_packet_size', DEFAULT_SESSION_MAX_PACKET_SIZE)
+    if window_size > 0:
+        session_options['window_size'] = window_size
+    if max_packet_size > 0:
+        session_options['max_packet_size'] = max_packet_size
+    return transport.open_session(**session_options)
 
 def filter_tty_attrs(line):
     '''Handle the attributes for colors, etc.'''
@@ -172,7 +208,7 @@ def connection_worker(host, conn, auth, sshconfig={}):
     # to, or an already established socket-like object. If conn is not
     # filled in, use the label as the hostname.
     if not conn:
-        conn = host
+        conn = str(host)
     if isinstance(conn, str):
         hostname = sshconfig.get('hostname', conn)
         port = sshconfig.get('port', '22')
@@ -191,7 +227,7 @@ def connection_worker(host, conn, auth, sshconfig={}):
             s = socket.create_connection((hostname, int(port)), timeout=timeout)
         run_local_command(conn, hostname, port, auth.default_user, sshconfig)
         t = paramiko.Transport(s)
-        t.setName(host)
+        t.name = host
 
         ciphers = sshconfig.get('ciphers')
         if ciphers:
@@ -235,7 +271,7 @@ def connection_worker(host, conn, auth, sshconfig={}):
         # Socket (or sock-like) which is a probably a tunneled connection
         t = paramiko.Transport(conn)
         port = t.getpeername()[1]
-        t.setName(host)
+        t.name = host
         hostname = host
     t.set_log_channel('radssh.paramiko.transport.%s' % host)
     # Assign the ssh_config LogLevel to the paramiko.transport logger
@@ -275,7 +311,7 @@ def connection_worker(host, conn, auth, sshconfig={}):
     return t
 
 
-def exec_command(host, t, cmd, quota, streamQ, encoding='UTF-8'):
+def exec_command(host, t, cmd, quota, streamQ, encoding='UTF-8', defaults=None):
     '''Run a command across a transport via exec_cmd. Capture stdout, stderr, and return code, streaming to an optional output queue'''
     return_code = None
     if isinstance(t, paramiko.Transport) and t.is_authenticated():
@@ -311,18 +347,19 @@ def exec_command(host, t, cmd, quota, streamQ, encoding='UTF-8'):
                 s.send('%s\n' % cmd)
                 break
         else:
-            s = t.open_session()
-            s.set_name(t.getName())
+            s = open_tuned_session(t, defaults)
+
+            s.set_name(t.name)
             xcmd = cmd
             s.exec_command(xcmd)
         stdout_eof = stderr_eof = False
-        quiet_increment = 0.4
+        quiet_increment = 0.2
         quiet_time = 0
         while not (stdout_eof and stderr_eof and s.exit_status_ready()):
             # Read from stdout socket
             s.settimeout(quiet_increment)
             try:
-                data = s.recv(16384)
+                data = s.recv(1024)
                 quiet_time = 0
                 if data:
                     stdout.push(data)
@@ -342,7 +379,7 @@ def exec_command(host, t, cmd, quota, streamQ, encoding='UTF-8'):
                 stdout.push('')
                 quiet_time += quiet_increment
                 try:
-                    if quiet_time > 5.0:
+                    if quiet_time > 30.0:
                         keepalive.ping()
                 except ServerNotResponding:
                     t.close()
@@ -370,6 +407,8 @@ def exec_command(host, t, cmd, quota, streamQ, encoding='UTF-8'):
                 break
             if user_abort.isSet():
                 process_completion = '*** <Ctrl-C> Abort ***'
+                stdout.push('\n=== mck ctrl-c received ===\n\n')
+                # can we somehow kill child process ?
                 break
             # Make a guess if the command completed, since persistent sessions
             # via invoke_shell don't do EOF or exit_status at all...
@@ -395,21 +434,40 @@ def exec_command(host, t, cmd, quota, streamQ, encoding='UTF-8'):
 
 
 def sftp_thread(host, t, srcfile, dstfile=None, attrs=None):
-    if not attrs:
-        attrs = paramiko.sftp_attr.SFTPAttributes.from_stat(os.stat(srcfile))
-    s = t.open_sftp_client()
-    if not dstfile:
-        dstfile = srcfile
-    s.put(srcfile, dstfile)
-    s.chmod(dstfile, attrs.st_mode % 4096)
+    sem.acquire()
+    s = None
+    metadata_errors = []
+
     try:
-        s.chown(dstfile, attrs.st_uid, attrs.st_gid)
-    except IOError:
-        pass
-    s.close()
+        if not dstfile:
+            dstfile = srcfile
+
+        if not attrs:
+            attrs = paramiko.sftp_attr.SFTPAttributes.from_stat(os.stat(srcfile))
+
+        s = t.open_sftp_client()
+        s.put(srcfile, dstfile)
+        try:
+            s.chmod(dstfile, attrs.st_mode % 4096)
+        except Exception as e:
+            metadata_errors.append('chmod: %r' % e)
+        try:
+            s.chown(dstfile, attrs.st_uid, attrs.st_gid)
+        except Exception as e:
+            metadata_errors.append('chown: %r' % e)
+    except Exception as e:
+        return CommandResult(command='SFTP %s -> %s' % (srcfile, dstfile),
+                             return_code=1, status='*** Failed ***',
+                             stdout=b'', stderr=repr(e).encode('UTF-8', 'replace'))
+    finally:
+        if s and hasattr(s, "close") and callable(s.close):
+            s.close()
+        sem.release()
+
     return CommandResult(command='SFTP %s -> %s' % (srcfile, dstfile),
                          return_code=0, status='*** Complete ***',
-                         stdout='Transferred %d bytes' % attrs.st_size, stderr='')
+                         stdout=('Transferred %d bytes' % attrs.st_size).encode('UTF-8'),
+                         stderr='\n'.join(metadata_errors).encode('UTF-8'))
 
 
 def close_connection(t, k, signoff=''):
@@ -457,7 +515,7 @@ class Cluster(object):
         self.last_result = None
         self.user_vars = {}
         self.quota = Quota(self.defaults)
-        self.chunk_size = None
+        self.chunk_size = 0
         self.chunk_delay = 0
         self.output_mode = self.defaults['output_mode']
         self.ordered_placeholder = self.defaults['ordered_placeholder']
@@ -512,7 +570,9 @@ class Cluster(object):
                             for id_string in self.defaults.get('force_tty', '').split(','):
                                 if id_string and id_string in transport.remote_version:
                                     self.console.message('%s (%s)' % (host, transport.remote_version), 'FORCE TTY')
-                                    tty = transport.open_session()
+
+                                    tty = open_tuned_session(transport, self.defaults)
+
                                     tty.set_name(transport.remote_version)
                                     tty.get_pty(width=132, height=43)
                                     tty.invoke_shell()
@@ -767,9 +827,9 @@ class Cluster(object):
                     continue
                 # Now we have a legit command line to execute
                 if self.output_mode == 'stream':
-                    self.pending[self.dispatcher.submit(exec_command, k, t, cmd, self.quota, self.console.q, self.defaults['character_encoding'])] = k
+                    self.pending[self.dispatcher.submit(exec_command, k, t, cmd, self.quota, self.console.q, self.defaults['character_encoding'], self.defaults)] = k
                 else:
-                    self.pending[self.dispatcher.submit(exec_command, k, t, cmd, self.quota, None, self.defaults['character_encoding'])] = k
+                    self.pending[self.dispatcher.submit(exec_command, k, t, cmd, self.quota, None, self.defaults['character_encoding'], self.defaults)] = k
             # Wait for background jobs to complete
             while self.pending:
                 try:
@@ -795,7 +855,7 @@ class Cluster(object):
                     pass
                 except KeyboardInterrupt:
                     self.console.status('<Ctrl-C>')
-                    if time.time() - last_interrupt < 2.0:
+                    if time.time() - last_interrupt < 7.0:
                         user_abort.set()
                         # break
                     else:
@@ -864,6 +924,17 @@ class Cluster(object):
 
     def sftp(self, src, dst=None, attrs=None):
         '''SFTP a file (put) to all nodes'''
+
+        for ix in range(10):
+            sem.release()
+
+        prev_chunk = 0
+        curr_chunk = int(self.chunk_size) if self.chunk_size else 9999
+        if curr_chunk > 10:
+            prev_chunk = curr_chunk
+            self.chunk_size = 10
+            '''self.console.message('Forcing chunk_size to 10 for *sftp ...')'''
+
         for k in self:
             t = self.connections[k]
             if k in self.disabled:
@@ -881,14 +952,25 @@ class Cluster(object):
                     result[host] = summary
                     if not summary.completed:
                         self.console.message('%s - %s' % (str(host), repr(summary.result)), 'EXCEPTION')
+                    elif isinstance(summary.result, CommandResult) and summary.result.return_code:
+                        self.console.message('%s - %s' % (str(host), repr(summary.result)), 'SFTP FAILED')
                     self.console.status('Completed on %d/%d hosts' % (total - len(self.pending), total))
             except UnfinishedJobs:
                 pass
             except KeyboardInterrupt:
                 self.console.message('<Ctrl-C> SFTP Transfer ignored.')
-                continue
+                self.dispatcher.terminate()
+                new_dispatcher = Dispatcher(outQ=queue.Queue(), threadpool_size=self.dispatcher.threadpool_size)
+                self.dispatcher = new_dispatcher
+                # raise
+                break
         self.last_result = result
         self.console.status('Ready')
+
+        if prev_chunk > 0:
+            self.chunk_size = int(curr_chunk) if (curr_chunk > 0 and curr_chunk < 9999) else 0
+            '''self.console.message('Resetting chunk_size ...')'''
+
         return result
 
     def status(self):

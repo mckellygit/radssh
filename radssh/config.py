@@ -87,6 +87,13 @@ authfile=~/.radssh_auth
 # Network Tweaks
 socket.timeout=30
 keepalive=180
+# SSH session channel tuning. Set a value to 0 to leave Paramiko's default.
+#ssh.channel.window_size=2147483647
+#ssh.channel.max_packet_size=2097152
+ssh.channel.window_size=0
+ssh.channel.max_packet_size=0
+ssh.rekey_bytes=1099511627776
+ssh.rekey_packets=1099511627776
 
 # Extensions to the shell via plugins
 # System plugin collections always loaded from ${EXEC}/plugins
@@ -126,6 +133,10 @@ force_tty=Cisco,force10networks
 # to permit session to behave as RadSSH expects, without user input...
 force_tty.signon=term length 0
 force_tty.signoff=term length 20
+
+# Configuration option to enable launching directly into *tty
+# mode when the connected cluster consists of a single host. ([on]|off)
+auto_tty=on
 
 # Should RadSSH initially send auth_none request (needed for OpenSSH 4.3 banner)
 try_auth_none=off

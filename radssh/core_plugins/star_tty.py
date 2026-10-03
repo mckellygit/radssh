@@ -19,12 +19,46 @@ import tty
 import os
 import fcntl
 import time
+import errno
 
+import signal
+
+from radssh.ssh import open_tuned_session
 
 settings = {
     'prompt_delay': "5.0",
     'rc_file': None
 }
+
+TERMINAL_INPUT_TRANSLATIONS = {
+    b'\033[127;5u': b'\x7f',
+    b'\033[3;3~': b'\x17',
+}
+TERMINAL_INPUT_PREFIXES = tuple(TERMINAL_INPUT_TRANSLATIONS)
+TERMINAL_INPUT_PENDING_TIMEOUT = 0.05
+
+
+def is_partial_terminal_input_sequence(data):
+    return (data == b'\033' or data.startswith(b'\033[')) and any(
+        input_sequence.startswith(data)
+        for input_sequence in TERMINAL_INPUT_PREFIXES)
+
+
+def translate_terminal_input(data, pending_data=b''):
+    data = pending_data + data
+    output = []
+    while data:
+        for input_sequence, replacement in TERMINAL_INPUT_TRANSLATIONS.items():
+            if data.startswith(input_sequence):
+                output.append(replacement)
+                data = data[len(input_sequence):]
+                break
+        else:
+            if is_partial_terminal_input_sequence(data):
+                return b''.join(output), data
+            output.append(data[:1])
+            data = data[1:]
+    return b''.join(output), b''
 
 
 def init(**kwargs):
@@ -40,16 +74,40 @@ def init(**kwargs):
         except Exception:
             pass
 
+def terminal_size():
+    import termios
+    import struct
+    h, w, hp, wp = struct.unpack('HHHH',
+                                 fcntl.ioctl(0, termios.TIOCGWINSZ,
+                                             struct.pack('HHHH', 0, 0, 0, 0)))
+    return w, h
 
 def posix_shell(chan, encoding='UTF-8'):
+
+    def sig_win(sig, frame):
+        if sig == signal.SIGWINCH:
+            try:
+                tw, th = terminal_size()
+                #print('SIGWINCH recvd:', th, tw)
+                chan.resize_pty(width=tw, height=th)
+            except:
+                pass
+
+    signal.signal(signal.SIGWINCH, sig_win)
+
     partial_buf = b''
-    try:
-        while True:
-            r, w, _ = select.select([chan, sys.stdin], [], [])
+    stdin_buf = b''
+    while True:
+        try:
+            timeout = TERMINAL_INPUT_PENDING_TIMEOUT if stdin_buf else 100
+            r, w, e = select.select([chan, sys.stdin], [], [], timeout)
+            if not r and stdin_buf:
+                chan.send(stdin_buf)
+                stdin_buf = b''
             if (chan in r):
                 try:
-                    x = chan.recv(1024)
-                    r1, w1, e1 = select.select([], [sys.stdout], [])
+                    x = chan.recv(10)
+                    r1, w1, e1 = select.select([], [sys.stdout], [], 100)
                     if (sys.stdout in w1):
                         if len(x) == 0:
                             sys.stdout.write('\r\n*** EOF ***\r\n')
@@ -63,19 +121,26 @@ def posix_shell(chan, encoding='UTF-8'):
                     # Keep the bytes read to append to on next pass
                     partial_buf += x
             if sys.stdin in r:
-                x = sys.stdin.read()
-                chan.send(x.encode(encoding))
-    except Exception as e:
-        print('Exception in TTY session\n%r\n' % e)
-
-
-def terminal_size():
-    import termios
-    import struct
-    h, w, hp, wp = struct.unpack('HHHH',
-                                 fcntl.ioctl(0, termios.TIOCGWINSZ,
-                                             struct.pack('HHHH', 0, 0, 0, 0)))
-    return w, h
+                x = os.read(sys.stdin.fileno(), 1024)
+                translated_input, stdin_buf = translate_terminal_input(
+                    x, stdin_buf)
+                if translated_input:
+                    chan.send(translated_input)
+        except socket.timeout:
+            pass
+        except UnicodeError:
+            pass
+        except select.error as ex:
+            if ex.args[0] != errno.EINTR:
+                print('select Exception in TTY session\n')
+                raise
+        except socket.error as ey:
+            if ey.args[0] != errno.EINTR:
+                print('socket Exception in TTY session\n')
+                raise
+        except Exception as e:
+            print('Exception in TTY session\n%r\n' % e)
+            raise
 
 
 def radssh_tty(cluster, logdir, cmd, *args):
@@ -126,7 +191,9 @@ def radssh_tty(cluster, logdir, cmd, *args):
             if not t.is_authenticated():
                 print('Skipping TTY request for %s (not authenticated)\r' % str(x))
                 continue
-            session = t.open_session()
+
+            session = open_tuned_session(t, cluster.defaults)
+
             session.get_pty(width=cols, height=lines)
             if prompt_delay:
                 print('Starting TTY session for %s\r' % str(x))

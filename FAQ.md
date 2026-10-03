@@ -14,12 +14,12 @@ RadSSH Project
 
 #. What version(s) of Python does RadSSH work with?
 
-   RadSSH is primarily developed and tested under Python 2.6/2.7. It functions and has been tested to a lesser extent under Python 3.3. **pip** installation will convert the source using the Python **2to3** source conversion utility. The goal is to support any Python runtime version that is supported by Paramiko.
+   RadSSH requires Python 3.10 or newer. The codebase is maintained for current CPython releases, including Python 3.10, 3.12, and 3.14, with Paramiko and netaddr installed.
 
 #. Does RadSSH work on Windows systems?
 
    YES! Starting with release 1.1.2, RadSSH should be fully compatible with Windows. Using the **colorama** module, the console formatting is now compatible with
-   windows console output. Additionally, the conditional dependency on **pyreadline** handles the command line input and editing features already available
+   windows console output. Additionally, the conditional dependency on **pyreadline3** handles the command line input and editing features already available
    on Linux and Mac OSX consoles.
 
 #. What remote hosts can RadSSH connect to?

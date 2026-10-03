@@ -86,8 +86,9 @@ Cluster object and pass it back as a return value, which will cause RadSSH to
 shift context to the new cluster for the remainder of the session.
 '''
 
-import imp
+import importlib.util
 import os
+import sys
 import warnings
 
 
@@ -151,8 +152,21 @@ def load_plugin(src):
     if not src.endswith('.py'):
         raise RuntimeError('RadSSH Plugins must be .py files [%s]' % src)
     module = src[:-3]
-    handle = imp.find_module(module, [plugin_dir])
-    plugin = imp.load_module(module, *handle)
+    plugin_path = os.path.join(plugin_dir, src)
+    spec = importlib.util.spec_from_file_location(module, plugin_path)
+    if spec is None or spec.loader is None:
+        raise ImportError('Unable to load plugin module [%s]' % plugin_path)
+    plugin = importlib.util.module_from_spec(spec)
+    previous_module = sys.modules.get(module)
+    sys.modules[module] = plugin
+    try:
+        spec.loader.exec_module(plugin)
+    except Exception:
+        if previous_module is None:
+            sys.modules.pop(module, None)
+        else:
+            sys.modules[module] = previous_module
+        raise
     # Patch in StarCommand class wrapper for plain *command functions
     if hasattr(plugin, 'star_commands'):
         for name, cmd in plugin.star_commands.items():

@@ -8,6 +8,7 @@
 # according to the Revised BSD License, a copy of which should be
 # included with the distribution as file LICENSE.txt
 #
+# NOTE: this is not a plugin and needs to go into radssh install dir
 
 '''
 Python wrapper for parallel execution shell
@@ -29,6 +30,9 @@ import pprint
 import readline
 import atexit
 import logging
+import fcntl
+
+import paramiko
 
 from . import ssh
 from . import config
@@ -48,6 +52,10 @@ except ImportError:
 
     star = NullStarCommands()
 
+def lock_file(f):
+    if f.writable(): fcntl.lockf(f, fcntl.LOCK_EX)
+def unlock_file(f):
+    if f.writable(): fcntl.lockf(f, fcntl.LOCK_UN)
 
 # Try using colorama when running on Windows
 if sys.platform.startswith('win'):
@@ -68,6 +76,23 @@ except OSError:
 ################################################################################
 
 command_listeners = []
+
+READLINE_KEY_BINDINGS = (
+    (r'"\e[127;5u": backward-delete-char',
+     r'bind "^[[127;5u" ed-delete-prev-char'),
+    (r'"\e[3;3~": unix-word-rubout',
+     r'bind "^[[3;3~" ed-delete-prev-word'),
+)
+
+
+def readline_key_bindings(using_libedit=False):
+    binding_index = 1 if using_libedit else 0
+    return [bindings[binding_index] for bindings in READLINE_KEY_BINDINGS]
+
+
+def configure_readline_key_bindings(using_libedit=False):
+    for binding in readline_key_bindings(using_libedit):
+        readline.parse_and_bind(binding)
 
 
 def shell(cluster, logdir=None, playbackfile=None, defaults=None):
@@ -175,7 +200,7 @@ class radssh_tab_handler(object):
         try:
             self.using_libedit = ('libedit' in readline.__doc__)
         except TypeError:
-            # pyreadline (windows) readline.__doc__ is None (not iterable)
+            # pyreadline3 (windows) readline.__doc__ is None (not iterable)
             self.using_libedit = False
         self.completion_choices = []
         readline.set_completer()
@@ -185,6 +210,18 @@ class radssh_tab_handler(object):
             readline.parse_and_bind('bind ^I rl_complete')
         else:
             readline.parse_and_bind('tab: complete')
+        configure_readline_key_bindings(self.using_libedit)
+        for t in self.cluster.connections.values():
+            if isinstance(t, paramiko.Transport) and t.is_authenticated():
+                self.s = t.open_sftp_client()
+                sess = t.open_session()
+                sess.exec_command("echo $HOME\n")
+                stdout = sess.makefile('rb', -1)
+                sess.recv_exit_status()
+                self.home_dir = stdout.readline().strip().decode('UTF-8')
+                stdout.close()
+                sess.close()
+                break
 
     def complete_star_command(self, lead_in, text, state):
         if state == 0:
@@ -222,23 +259,45 @@ class radssh_tab_handler(object):
     def complete_remote_path(self, lead_in, text, state):
         if state == 0:
             del self.completion_choices[:]
-            for t in self.cluster.connections.values():
-                if t.is_authenticated():
-                    break
-            else:
-                print('No authenticated connections')
-                raise RuntimeError('Tab Completion unavailable')
-            s = t.open_sftp_client()
+            try:
+                self.s.stat('/')
+            except Exception as e:
+                for t in self.cluster.connections.values():
+                    if isinstance(t, paramiko.Transport) and t.is_authenticated():
+                        self.s = t.open_sftp_client()
+                        sess = t.open_session()
+                        sess.exec_command("echo $HOME\n")
+                        stdout = sess.makefile('rb', -1)
+                        sess.recv_exit_status()
+                        self.home_dir = stdout.readline().strip().decode('UTF-8')
+                        stdout.close()
+                        sess.close()
+                        break
+                else:
+                    print('No authenticated connections')
+                    raise RuntimeError('Tab Completion unavailable')
+            cdir = self.cluster.user_vars.get('%curr_dir%', '~')
+            if not cdir:
+                cdir = '~'
+            if cdir.startswith('~'):
+                cdir = cdir.replace("~", self.home_dir, 1)
+            try:
+                self.s.stat(cdir)
+            except IOError as e:
+                cdir = './'
             parent = os.path.dirname(lead_in)
             partial = os.path.basename(lead_in)
             if not parent:
-                parent = './'
-            for x in s.listdir(parent):
+                parent = cdir
+            else:
+                if not parent.startswith('/'):
+                    parent = cdir + '/' + parent
+            for x in self.s.listdir(parent):
                 if x.startswith(partial):
                     full_path = os.path.join(parent, x)
                     try:
                         # See if target is a directory, and append '/' if it is
-                        s.chdir(full_path)
+                        self.s.chdir(full_path)
                         x += '/'
                         full_path += '/'
                     except Exception:
@@ -294,19 +353,35 @@ class radssh_tab_handler(object):
 # Workaround for https://github.com/radssh/radssh/issues/32
 # Newer GNU Readline library raise false errno value that the Python
 # wrapper reraises as IOError. https://bugs.python.org/issue10350 not
-# being backported to Python 2.7, so handle it with more code...
-def safe_write_history_file(filename):
+# being fixed consistently across supported distributions, so handle it here.
+def safe_write_history_file(filename, nelems=None):
     # To avoid false negative, use stat() to test the file modification times
-    try:
-        readline.write_history_file(filename)
-    except IOError as e:
-        # Ignore this exception if we wrote out the history file recently
+    if nelems is None:
+        nelems = int(os.environ.get('HISTSIZE', 1000))
+    if nelems <= 0:
+        return
+
+    with open(filename, 'a') as history_file:
+        lock_file(history_file)
         try:
-            post = os.stat(filename).st_mtime
-            if post > time.time() - 3:
-                logging.debug('Ignoring "%s" writing history file', str(e))
-        except Exception:
-            raise e
+            if hasattr(readline, 'append_history_file'):
+                readline.append_history_file(nelems, filename)
+            elif hasattr(readline, 'append_history'):
+                readline.append_history(nelems, filename)
+            else:
+                readline.write_history_file(filename)
+        except IOError as e:
+            # Ignore this exception if we wrote out the history file recently
+            try:
+                post = os.stat(filename).st_mtime
+                if post > time.time() - 3:
+                    logging.debug('Ignoring "%s" writing history file', str(e))
+                else:
+                    raise e
+            except Exception:
+                raise e
+        finally:
+            unlock_file(history_file)
 
 
 ################################################################################
@@ -346,10 +421,10 @@ def radssh_shell_main():
     # Load Plugins to aid in host lookups and add *commands dynamically
     loaded_plugins = {}
     exe_dir = os.path.dirname(os.path.realpath(sys.argv[0]))
-    system_plugin_dir = os.path.join(exe_dir, 'plugins')
+    system_plugin_dirs = [os.path.join(exe_dir, x) for x in ('plugins', 'core_plugins', 'extra_plugins')]
     disable_plugins = defaults['disable_plugins'].split(',')
     plugin_dirs = [x for x in defaults['plugins'].split(';') if x]
-    plugin_dirs.append(system_plugin_dir)
+    plugin_dirs.extend(system_plugin_dirs)
 
     for x in plugin_dirs:
         plugin_dir = os.path.abspath(os.path.expanduser(x))
@@ -496,14 +571,16 @@ def radssh_shell_main():
         histfile = os.path.expanduser(defaults['historyfile'])
         try:
             readline.read_history_file(histfile)
-        except IOError:
-            pass
-        readline.set_history_length(int(os.environ.get('HISTSIZE', 1000)))
-        if sys.version_info.major == 2:
-            # Workaround #32 - fix not backported to Python 2.X
-            atexit.register(safe_write_history_file, histfile)
-        else:
-            atexit.register(readline.write_history_file, histfile)
+            h_len = readline.get_current_history_length()
+        except FileNotFoundError:
+            open(histfile, 'wb').close()
+            h_len = 0
+
+        def save(prev_h_len, histfile):
+            new_h_len = readline.get_current_history_length()
+            readline.set_history_length(1000)
+            safe_write_history_file(histfile, new_h_len - prev_h_len)
+        atexit.register(save, h_len, histfile)
 
     # Add TAB completion for *commands and remote file paths
     tab_completion = radssh_tab_handler(cluster, star)

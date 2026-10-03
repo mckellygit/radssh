@@ -48,18 +48,18 @@ If you have a local source tree, either from a developer checkout or from un-tar
 Verifying the Install
 =====================
 
-Once installed, you should run ``python -m radssh`` (or if running Python 2.6, ``python -m radssh.__main__``) as a diagnostic test. If successful, it will report the results of loading the RadSSH package and its dependencies, along with some details about the Python runtime environment and current host. It will also run some capacity checks for the system limitations on concurrent open files and execution threads. These upper limits, if listed, are a significant factor in how many concurrent connections RadSSH will be able to handle on your system.
+Once installed, you should run ``python -m radssh`` as a diagnostic test. If successful, it will report the results of loading the RadSSH package and its dependencies, along with some details about the Python runtime environment and current host. It will also run some capacity checks for the system limitations on concurrent open files and execution threads. These upper limits, if listed, are a significant factor in how many concurrent connections RadSSH will be able to handle on your system.
 
 Sample Output::
 
     (sample_env)[paul@pkapp2 ~]$ python -m radssh
-    RadSSH Main Module
-    Package RadSSH 1.1.1 from (/usr/lib/python2.7/site-packages//radssh/__init__.pyc)
-      Using Paramiko  1.15.2 from /usr/lib/python2.7/site-packages/paramiko/__init__.pyc
-      Using PyCrypto 2.6.1 from /usr/lib64/python2.7/site-packages/Crypto/__init__.pyc
-      Using netaddr 0.7.12 from /usr/lib/python2.7/site-packages/netaddr/__init__.pyc
+    RadSSH Runtime Information Report
+    Package RadSSH 1.3.0 from (/usr/lib/python3/site-packages/radssh/__init__.py)
+      Using Paramiko  3.5.1 from /usr/lib/python3/site-packages/paramiko/__init__.py
+      Using cryptography 48.0.0 from /usr/lib/python3/site-packages/cryptography/__init__.py
+      Using netaddr 1.3.0 from /usr/lib/python3/site-packages/netaddr/__init__.py
 
-    Python 2.7.6 (CPython)
+    Python 3.10.12 (CPython)
     Running on Linux [pkapp2.risk.regn.net]
       Scientific Linux (6.8/Carbon)
 

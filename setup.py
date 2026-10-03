@@ -32,7 +32,7 @@ for p, d, f in os.walk('radssh'):
     if p.endswith('_plugins'):
         print('Merging plugins from %s' % p)
         for plugin in f:
-            if not plugin.endswith('.pyc'):
+            if plugin != '__init__.py' and not plugin.endswith('.pyc'):
                 shutil.copy2(os.path.join(p, plugin), 'radssh/plugins')
 
 # Get list of non .py files in plugins directory to include as pkg_data
@@ -45,7 +45,7 @@ os.chdir(olddir)
 required_packages = ['paramiko>=2.7.0', 'netaddr']
 if sys.platform.startswith('win'):
     required_packages.append('colorama>=0.3.9')
-    required_packages.append('pyreadline')
+    required_packages.append('pyreadline3')
 
 setup(name='radssh',
       version=radssh.version,
@@ -66,15 +66,18 @@ setup(name='radssh',
           'Operating System :: Microsoft :: Windows',
           'Operating System :: MacOS :: MacOS X',
           'Programming Language :: Python :: 3',
-          'Programming Language :: Python :: 3.5',
-          'Programming Language :: Python :: 3.6',
-          'Programming Language :: Python :: 3.7',
-          'Programming Language :: Python :: 3.8',
+          'Programming Language :: Python :: 3 :: Only',
+          'Programming Language :: Python :: 3.10',
+          'Programming Language :: Python :: 3.11',
+          'Programming Language :: Python :: 3.12',
+          'Programming Language :: Python :: 3.13',
+          'Programming Language :: Python :: 3.14',
           'Topic :: System :: Shells',
           'Topic :: Utilities'],
-      packages=['radssh', 'radssh.plugins'],
+    packages=['radssh', 'radssh.core_plugins', 'radssh.plugins'],
       package_data={'': pkg_data_files},
       install_requires=required_packages,
+      python_requires='>=3.10',
       long_description='''
 RadSSH Package
 ==============

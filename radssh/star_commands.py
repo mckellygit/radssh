@@ -204,7 +204,7 @@ def forwarding(channel, origin, server):
     try:
         s = socket.create_connection(forwarding_dest)
         bk = threading.Thread(target=flow, args=(s, channel))
-        bk.setName('RemoteTunnel_%s' % channel.get_name())
+        bk.name = 'RemoteTunnel_%s' % channel.get_name()
         bk.start()
     except Exception as e:
         print('Remote forward failed:', repr(e))
@@ -283,7 +283,7 @@ def star_quota(cluster, logdir, cmdline, *args):
     if cluster.quota.line_limit:
         print('\tOutput Line Limit: %d lines' % cluster.quota.line_limit)
     else:
-        print('\tOutput Byte Limit: Unlimited')
+        print('\tOutput Line Limit: Unlimited')
 
 
 def star_vars(cluster, logdir, cmdline, *args):

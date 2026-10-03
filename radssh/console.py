@@ -74,8 +74,8 @@ class RadSSHConsole(object):
         self.formatter = formatter
         self.quietmode = False
         self.background_thread = threading.Thread(target=self.console_thread, args=())
-        self.background_thread.setDaemon(True)
-        self.background_thread.setName('Console Output')
+        self.background_thread.daemon = True
+        self.background_thread.name = 'Console Output'
         self.background_thread.start()
 
         def limit_deque():

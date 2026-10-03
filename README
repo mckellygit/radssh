@@ -8,7 +8,7 @@
 # included with the distribution as file LICENSE.txt
 #
 
-Requires Python 3.5+. For earlier versions, RadSSH 1.1.2 is the last release supporting Python2 (and 3.4 and below). You will also need to have Paramiko and netaddr modules available, preferrably installed with your Linux distribution's own package manager.
+Requires Python 3.10+. For earlier versions, RadSSH 1.1.2 is the last release supporting Python2 (and 3.4 and below). You will also need to have Paramiko and netaddr modules available, preferrably installed with your Linux distribution's own package manager.
 
 Since I restructured it as a source distributable module, you should also get python-setuptools-0.6.10-3.el6.noarch if you don't already have it. Installation as a system level module is done with:
 cd radssh

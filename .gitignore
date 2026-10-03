@@ -2,6 +2,7 @@ docs/build
 build/
 dist/
 radssh.egg-info/
-radssh/plugins
+radssh/plugins/*
+!radssh/plugins/__init__.py
 *.log
 *.pyc

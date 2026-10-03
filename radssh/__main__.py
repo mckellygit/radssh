@@ -27,13 +27,23 @@ import sys
 import time
 import platform
 import threading
+import re
 
 import netaddr
 import radssh
 import paramiko
 
+
+def paramiko_version_info():
+    version_info = getattr(paramiko, '__version_info__', None)
+    if version_info is not None:
+        return version_info
+
+    return tuple(int(part) for part in re.match(r'^(\d+)(?:\.(\d+))?', paramiko.__version__).groups('0'))
+
+
 # Paramiko 2.0 switched dependency from PyCrypto to cryptography.io
-if paramiko.__version_info__ >= (2, 0):
+if paramiko_version_info() >= (2, 0):
     import cryptography as crypto_module
 else:
     import Crypto as crypto_module
@@ -80,8 +90,11 @@ if __name__ == '__main__':
         # Use distro if available for details, otherwise fallback to platform.platform
         try:
             import distro
-            print('  %s (%s)' % (distro.linux_distribution()[0],
-                  '/'.join([fld for fld in distro.linux_distribution()[1:] if fld])))
+            distro_details = '/'.join([fld for fld in (distro.version(), distro.codename()) if fld])
+            if distro_details:
+                print('  %s (%s)' % (distro.name(), distro_details))
+            else:
+                print('  %s' % distro.name())
         except ImportError:
             print('  %s' % platform.platform())
     print('Encoding for stdout:', sys.stdout.encoding)

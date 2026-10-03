@@ -1,6 +1,8 @@
 Features
 ==========
 
+ - Restored compatibility with current CPython releases, including Python 3.10, 3.12, and 3.14, by replacing the removed ``imp`` plugin loader with ``importlib`` and updating deprecated thread APIs.
+
  - Staring with 1.3.0 release, RadSSH has dropped support for all versions of Python2.  Users who still require Python2 runtime should install version 1.1.2. Version 1.3.0 requires Python 3.5 or greater, and Paramiko 2.7.0 or greater, as its new minimum system requirements.
 
  - Added support for ed25519 keys for user authentication (1.3.0)

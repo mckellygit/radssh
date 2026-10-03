@@ -32,7 +32,10 @@ def star_history(cluster, logdir, cmd, *args):
     '''Print recent RadSSH command line history'''
     hist = gather_history()
     for n, line in enumerate(hist, 1):
-        print('%5d - %s' % (n, line))
+        try:
+            print('%5d - %s' % (n, line))
+        except Exception as e:
+            pass
 
 
 last_command = ''
@@ -40,6 +43,13 @@ aliases = {}
 
 
 def init(**kwargs):
+    # mck - just some basic aliases ...
+    #       TODO: could we read these from the config file ?
+    aliases['rm']='rm -i'
+    aliases['ll']='ls -ltr'
+    aliases['less']='less -R'
+    aliases['grep']='grep --color=auto'
+    return
     '''Use subprocess to get shell to source a likely alias defining file'''
     cmd = None
     if os.path.exists(os.path.expanduser('~/.bash_profile')):

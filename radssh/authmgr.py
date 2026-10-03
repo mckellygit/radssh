@@ -374,7 +374,7 @@ class AuthManager(object):
                     while not auth_success and retries > 0 and T.is_active():
                         if not password:
                             password = PlainText(user_password(
-                                'Please enter a password for (%s@%s) :' % (auth_user, T.getName())))
+                                'Please enter a password for (%s@%s) :' % (auth_user, T.name)))
                             retries -= 1
                         auth_success = self.try_auth(T, [(None, password)], True, auth_user)
                         if auth_success:

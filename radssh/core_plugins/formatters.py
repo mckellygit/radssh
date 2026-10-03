@@ -55,7 +55,7 @@ def ansi256_rj(tag, text):
             yield '\033[38;5;%dm%s[%s]\033[0m\n' % (color, wide_line, label)
 
 
-def ip_hash(hstr0):
+def ip_hashold(hstr0):
     '''Improved hashing when dealing with consecutive IP addresses'''
     hstr1 = re.sub('[^0-9]', '.', hstr0)
     hstr2 = hstr1.replace(".", "0")
@@ -63,14 +63,34 @@ def ip_hash(hstr0):
     hval = int(hstr)
     return hval
 
+def hsum(hstr0):
+    temp = "0"
+    Sum = 0
+    for ch in hstr0:
+        if (ch.isdigit()):
+            temp += ch
+        else:
+            Sum += int(temp)
+            temp = "0"
+    return Sum + int(temp)
+
+def ip_hash(hstr0):
+    hstr = ''.join([n for n in hstr0 if n.isdigit()])
+    if len(hstr) == 0:
+        return hash(hstr0)
+    else:
+        return hsum(hstr0)
 
 def ip_colorizer(tag, text):
     '''Alternative ANSI colorized output - ensure that IP address ranges cycle colors more uniformly'''
     # Copied from standard colorizer, but with a custom hash function
     label, hilight = tag
     color = 1 + ip_hash(str(label)) % 7
+    ip = str(label)
     for line in text.split('\n'):
         if hilight:
-            yield '\033[30;4%dm[%s]\033[0;1;3%dm %s\033[0m\n' % (color, label, color, line)
+            yield '\033[30;4%dm[%s]\033[0;1;3%dm %s\033[0m\n' % (color, ip.ljust(15), color, line)
         else:
-            yield '\033[3%dm[%s] %s\033[0m\n' % (color, label, line)
+            yield '\033[3%dm[%s] %s\033[0m\n' % (color, ip.ljust(15), line)
+
+
